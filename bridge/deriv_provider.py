@@ -193,7 +193,7 @@ class DerivProvider:
             try:
                 log.info("connecting to %s", PUBLIC_WS)
                 async with websockets.connect(
-                    PUBLIC_WS, open_timeout=10, ping_interval=20, ping_timeout=20, max_size=None, extra_headers=DERIV_HEADERS
+                    PUBLIC_WS, open_timeout=10, ping_interval=20, ping_timeout=20, max_size=None
                 ) as ws:
                     self._ws = ws
                     self._sub_ids.clear()
@@ -509,7 +509,6 @@ class DerivProvider:
     async def _auth_run(self):
         import websockets
         backoff = 5.0
-        app_id = self.app_id or "1089"
 
         while True:
             if not self.token or self.token.startswith("MY_") or self.token.strip() == "":
@@ -517,100 +516,51 @@ class DerivProvider:
                 await asyncio.sleep(15)
                 continue
 
-            urls = [
-                f"wss://ws.derivws.com/websockets/v3?app_id={app_id}",
-                f"wss://ws.binaryws.com/websockets/v3?app_id={app_id}",
-            ]
+            try:
+                url = await self._get_otp_url()
+                async with websockets.connect(
+                    url, open_timeout=10, ping_interval=20, ping_timeout=20, max_size=None
+                ) as ws:
+                    self._auth_ws = ws
+                    self.auth_error = ""
+                    backoff = 5.0
+                    log.info("Deriv authenticated socket connected: %s", self.account_id)
 
-            connected_ok = False
-            for ws_url in urls:
-                try:
-                    async with websockets.connect(
-                        ws_url, open_timeout=10, ping_interval=20, ping_timeout=20, max_size=None, extra_headers=DERIV_HEADERS
-                    ) as ws:
-                        self._auth_ws = ws
-                        self._trade_rid += 1
-                        auth_rid = self._trade_rid
-                        fut = asyncio.get_running_loop().create_future()
-                        self._auth_pending[auth_rid] = fut
+                    # Subscribe to live balance updates
+                    await ws.send(json.dumps({"balance": 1, "subscribe": 1, "req_id": 1}))
 
-                        # Send direct WebSocket authorize request
-                        await ws.send(json.dumps({"authorize": self.token, "req_id": auth_rid}))
-
-                        try:
-                            auth_res = await asyncio.wait_for(fut, timeout=12.0)
-                        except asyncio.TimeoutError:
-                            self.auth_error = "Deriv authentication request timed out"
-                            log.warning(self.auth_error)
+                    async for raw in ws:
+                        d = json.loads(raw)
+                        rid = d.get("req_id", 0)
+                        fut = self._auth_pending.get(rid) if rid >= 1000 else None
+                        if fut is not None:
+                            if not fut.done():
+                                fut.set_result(d)
                             continue
-                        finally:
-                            self._auth_pending.pop(auth_rid, None)
 
-                        if auth_res.get("error"):
-                            err = auth_res["error"]
-                            code = err.get("code", "AuthError")
-                            msg = err.get("message", "Authorization failed")
-                            self.auth_error = f"{code}: {msg}"
-                            log.warning("Deriv account socket auth failed: %s", self.auth_error)
-                            await asyncio.sleep(15.0)
-                            connected_ok = True
-                            break
+                        if d.get("error"):
+                            err_m = f"{d['error'].get('code')}: {d['error'].get('message')}"
+                            log.warning("account socket message error: %s", err_m)
+                            continue
 
-                        # Authorized successfully!
-                        self.auth_error = ""
-                        backoff = 5.0
-                        connected_ok = True
-                        auth_info = auth_res.get("authorize", {})
-                        if auth_info:
-                            if "balance" in auth_info:
-                                self.balance = _num(auth_info.get("balance"))
-                            if "currency" in auth_info:
-                                self.currency = auth_info.get("currency", self.currency)
-                            self.is_demo = bool(auth_info.get("is_virtual", 1))
-                            if auth_info.get("loginid"):
-                                self.account_id = str(auth_info.get("loginid"))
+                        b = d.get("balance")
+                        if isinstance(b, dict):
+                            self.balance = _num(b.get("balance"))
+                            self.currency = b.get("currency", self.currency)
 
-                        # Subscribe to live balance updates
-                        await ws.send(json.dumps({"balance": 1, "subscribe": 1, "req_id": 1}))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self.auth_error = f"Deriv account login error: {e}"
+                log.warning(self.auth_error)
+            finally:
+                self._auth_ws = None
+                for f in list(self._auth_pending.values()):
+                    if not f.done():
+                        f.set_exception(ConnectionError("Deriv account connection dropped"))
 
-                        async for raw in ws:
-                            d = json.loads(raw)
-                            rid = d.get("req_id", 0)
-                            fut = self._auth_pending.get(rid) if rid >= 1000 else None
-                            if fut is not None:
-                                if not fut.done():
-                                    fut.set_result(d)
-                                continue
-
-                            if d.get("error"):
-                                err_m = f"{d['error'].get('code')}: {d['error'].get('message')}"
-                                log.warning("account socket message error: %s", err_m)
-                                continue
-
-                            b = d.get("balance")
-                            if isinstance(b, dict):
-                                self.balance = _num(b.get("balance"))
-                                self.currency = b.get("currency", self.currency)
-                        break
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    err_str = str(e)
-                    if "520" in err_str or "502" in err_str or "no close frame" in err_str.lower() or "connection closed" in err_str.lower():
-                        self.auth_error = "Deriv server unreachable or blocked; retrying with backup node"
-                    else:
-                        self.auth_error = f"Deriv account login error: {e}"
-                    log.warning(self.auth_error)
-
-                finally:
-                    self._auth_ws = None
-                    for f in list(self._auth_pending.values()):
-                        if not f.done():
-                            f.set_exception(ConnectionError("Deriv account connection dropped"))
-
-            if not connected_ok:
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 60.0)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60.0)
 
     # ---------------------------------------------------------------- trading
     async def _auth_request(self, payload: dict, timeout: float = 15):

@@ -22,7 +22,13 @@ from typing import Optional
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from BinaryOptionsToolsV2.pocketoption import PocketOptionAsync
+try:
+    from BinaryOptionsToolsV2.pocketoption import PocketOptionAsync
+except Exception:
+    class PocketOptionAsync:
+        def __init__(self, *args, **kwargs): pass
+        async def connect(self): return False
+        async def close(self): pass
 
 try:
     try:

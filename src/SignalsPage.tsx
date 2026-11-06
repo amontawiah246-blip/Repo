@@ -473,7 +473,7 @@ export default function SignalsPage({ wsBase, apiBase, broker, setBroker, asset,
           <label className="sg-auto"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /><i /> Auto</label>
           {auto
             ? <button className="sg-grad wide sg-stop" onClick={() => { setAuto(false); scanId.current++; stop(); setPhase("idle"); setScan(null); }}>Stop Auto</button>
-            : <button className="sg-grad wide" disabled={busy || !binary} onClick={() => { setAuto(false); run(); }}>{busy ? "Analyzing…" : "Generate signal"}</button>}
+            : <button className="sg-grad wide" disabled={busy || !binary} onClick={() => { setAuto(false); run(); }}>{busy ? "Analyzing…" : "Get signal"}</button>}
           <div className="sg-foot">
             <span className="sg-clock"><Clock size={18} /> <b>{clock(serverNow)}</b> UTC</span>
             <button className="sg-gear" onClick={() => setSettings((s) => !s)}><Settings size={18} /> Signal settings</button>
@@ -491,7 +491,7 @@ export default function SignalsPage({ wsBase, apiBase, broker, setBroker, asset,
             <div className="sg-empty">
               <span className="sg-ico big"><ChartColumn size={24} /></span>
               <h3>No signal yet</h3>
-              <p>Choose a market and press Generate signal. Results are checked automatically.</p>
+              <p>Choose a market and press Get signal. Results are checked automatically.</p>
             </div>
           )}
           {err && phase === "idle" && (
