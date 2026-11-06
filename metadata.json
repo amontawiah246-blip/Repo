@@ -1,0 +1,6 @@
+{
+  "name": "QuantX Dashboard",
+  "description": "QuantX real-data Deriv synthetic multi-engine dashboard with live multi-agent market charts and manual trading execution.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
